@@ -1,0 +1,19 @@
+{
+  "sku": "BAGEL-PLAIN-6PK",
+  "recommended_quantity": 60,
+  "safety_stock": 4.42,
+  "reorder_point": 48.89,
+  "target_level": 71.12,
+  "average_daily_demand": 22.23,
+  "current_on_hand": 14,
+  "current_on_order": 0,
+  "ordering_is_inhibited": false,
+  "constraints": [
+    {
+      "name": "case_size",
+      "original_quantity": 57,
+      "final_quantity": 60,
+      "reason": "rounded up 57.1 to 60 units (5 cases of 12)"
+    }
+  ]
+}

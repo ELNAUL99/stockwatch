@@ -1,0 +1,133 @@
+name: CI
+
+# Every push, and every PR. Running on both means a PR from a branch in this
+# repo gets checked twice, which is a small waste — the alternative is that
+# pushes to branches without a PR go unchecked, which is worse.
+on:
+  push:
+  pull_request:
+
+# Cancel a run when a newer commit lands on the same branch. Without this, a
+# rapid series of pushes queues up runs that are already obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  build:
+    name: vet, lint, test, build
+    runs-on: ubuntu-latest
+    # The integration tests start a Postgres container via testcontainers, which
+    # can take a minute on a cold runner. The default 360-minute timeout is far
+    # too generous for a hung test.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # Caches the module and build caches keyed on go.sum.
+          cache: true
+
+      - name: Verify go.mod is tidy
+        # Catches a dependency added without running `go mod tidy`. Done before
+        # anything else, because an untidy go.mod can make later steps download
+        # things the committed go.sum does not cover.
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum \
+            || { echo "::error::go.mod/go.sum are not tidy; run 'go mod tidy'"; exit 1; }
+
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: latest
+          # The action installs its own Go otherwise, which would ignore the
+          # version pinned above and could disagree with the build.
+          install-go: false
+
+      - name: Test with race detector
+        # No -short, so this runs the Postgres integration tests too. GitHub's
+        # ubuntu runners have a Docker daemon available, which is what
+        # testcontainers needs. This is the step that actually exercises the SQL.
+        #
+        # -race roughly doubles runtime but catches data races that are otherwise
+        # invisible until they corrupt something in production.
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Enforce domain coverage
+        # The domain is the part of this service worth protecting. The threshold
+        # guards against silently deleting tests; it is not an invitation to
+        # write assertions purely to raise a number.
+        run: |
+          go test -short -coverprofile=domain.out ./internal/inventory/
+          pct=$(go tool cover -func=domain.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+          echo "internal/inventory coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { exit (p >= 80 ? 0 : 1) }' \
+            || { echo "::error::domain coverage ${pct}% is below the 80% threshold"; exit 1; }
+
+      - name: Build binaries
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/server
+          CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/migrate
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: stockwatch:ci
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          # Reuse layer cache between runs via the Actions cache backend,
+          # otherwise every build recompiles the full dependency tree.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        # Proves the binary in the image actually runs. A static-linking mistake
+        # produces an image that builds perfectly and then exits 1 on start with
+        # "no such file or directory" — a confusing error that means the dynamic
+        # loader is missing, and one that only a run catches.
+        run: docker run --rm stockwatch:ci -version
+
+      - name: Fail fast if the image has a shell
+        # The distroless base is chosen partly so that an attacker with RCE finds
+        # no shell to pivot with. If a future edit switches the base to alpine
+        # for convenience, this catches it.
+        run: |
+          if docker run --rm --entrypoint /bin/sh stockwatch:ci -c 'echo shell present' 2>/dev/null; then
+            echo "::error::the runtime image contains a shell; expected distroless"
+            exit 1
+          fi
+          echo "no shell in image, as expected"

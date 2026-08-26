@@ -1,0 +1,20 @@
+# Compiled binaries.
+/bin/
+*.exe
+
+# Test and coverage output.
+*.out
+*.test
+coverage.html
+
+# Local environment. .env holds real credentials and must never be committed;
+# .env.example is the documented template and is tracked.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise.
+.vscode/
+.idea/
+.DS_Store
+*.swp

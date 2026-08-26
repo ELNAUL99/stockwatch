@@ -1,0 +1,79 @@
+# Runs the whole service from a clean clone:
+#
+#   docker compose up --build
+#
+# No "version:" key — it has been obsolete since Compose v2 and current versions
+# warn about it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stockwatch
+      POSTGRES_PASSWORD: stockwatch
+      POSTGRES_DB: stockwatch
+    ports:
+      # Exposed so psql and `make migrate` can reach it from the host. Bound to
+      # 127.0.0.1 rather than 0.0.0.0 so a laptop on a café network is not
+      # serving Postgres to the room.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready ships with the image. The -U and -d flags matter: without
+      # them it probes the default "postgres" database, which can be ready while
+      # ours is not.
+      test: ["CMD-SHELL", "pg_isready -U stockwatch -d stockwatch"]
+      interval: 2s
+      timeout: 3s
+      # Generous retries rather than a long start_period, so a slow first boot
+      # (initdb on a cold volume) does not fail the stack.
+      retries: 15
+      start_period: 5s
+    restart: unless-stopped
+
+  stockwatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-local}
+    depends_on:
+      postgres:
+        # service_healthy, not the bare list form. Without this the service
+        # starts the instant the Postgres *container* exists, which is several
+        # seconds before Postgres accepts connections — the classic
+        # "connection refused on first boot" that people paper over with sleeps.
+        condition: service_healthy
+    environment:
+      # postgres is the compose service name, resolved by Docker's internal DNS.
+      DATABASE_URL: postgres://stockwatch:stockwatch@postgres:5432/stockwatch?sslmode=disable
+      ADDR: ":8080"
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      # Deliberately modest for a laptop. Production would raise this alongside
+      # the database's max_connections, not on its own.
+      DB_MAX_CONNS: "10"
+      DB_MIN_CONNS: "2"
+      REQUEST_TIMEOUT: 10s
+      SHUTDOWN_TIMEOUT: 20s
+      HISTORY_WINDOW_DAYS: "28"
+      DEMAND_ALPHA: "0.10"
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      # The image is distroless — no shell, no curl — so the binary probes
+      # itself. See the -healthcheck flag in cmd/server/main.go.
+      test: ["CMD", "/usr/local/bin/stockwatch", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Give the container longer than the app's own drain timeout, so Docker does
+    # not SIGKILL mid-drain and mask a shutdown bug. 20s drain, 30s grace.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

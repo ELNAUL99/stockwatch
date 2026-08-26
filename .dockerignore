@@ -1,0 +1,28 @@
+# Everything here is excluded from the build context sent to the daemon.
+# Keeping it small speeds up every build and, more importantly, prevents a stray
+# local file from silently ending up in an image layer.
+
+.git
+.github
+.gitignore
+
+# Compiled output and coverage artefacts — the image builds its own.
+/bin
+*.out
+*.test
+coverage.*
+
+# Local environment files. These hold credentials and must never be baked into
+# an image, where they would persist in the layer history even if deleted later.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise.
+.vscode
+.idea
+.DS_Store
+
+# Documentation is not needed to compile.
+README.md
+docs/
