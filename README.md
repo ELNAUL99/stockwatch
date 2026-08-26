@@ -5,6 +5,25 @@ product sold, what is on the shelf, and how long the vendor takes to deliver, it
 returns a concrete order quantity — and tells the buyer which real-world limit
 changed that number when the arithmetic alone would have said otherwise.
 
+## Live demo
+
+| | URL |
+|---|---|
+| **Dashboard** | https://stockwatch-web-g40n.onrender.com |
+| **API** | https://stockwatch-api-v2ok.onrender.com |
+
+Deployed on Render: a Go web service, a React/Vite static site, and a private
+Postgres reachable only over Render's internal network. The API seeds itself on
+boot (`./seed && ./app`) with history ending yesterday, so the demo data never
+falls outside the estimation window. Both run on the free tier and spin down
+after ~15 minutes idle — the first request then takes 30–60s to wake the service.
+
+Try the API directly:
+
+```bash
+curl -s https://stockwatch-api-v2ok.onrender.com/products/BAGEL-PLAIN-6PK/recommendation
+```
+
 ---
 
 ## Quickstart
