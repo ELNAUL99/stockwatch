@@ -28,6 +28,12 @@ type Config struct {
 	IdleTimeout     time.Duration
 	MaxBodyBytes    int64
 
+	// CORSAllowedOrigins lists the browser origins permitted to call this API.
+	// A single "*" entry allows any origin, which is safe here only because the
+	// API uses no cookies or credentials — a browser will not attach either to a
+	// wildcard-origin response. Lock it to explicit origins the moment auth lands.
+	CORSAllowedOrigins []string
+
 	// Connection pool. Explicit rather than left to pgx's defaults, because
 	// pool sizing is a property of the deployment — instance count, database
 	// max_connections, expected concurrency — and a default that silently works
@@ -74,6 +80,11 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg.Addr = envString("ADDR", ":8080")
+
+	// Comma-separated list, e.g. "https://app.example.com,https://admin.example.com".
+	// Defaults to "*" so a fresh deployment works before any origin is known;
+	// tighten it once the frontend URL is fixed.
+	cfg.CORSAllowedOrigins = splitAndTrim(envString("CORS_ALLOWED_ORIGINS", "*"))
 
 	// Timeout relationships that must hold, checked below rather than assumed:
 	// RequestTimeout bounds handler work, WriteTimeout bounds the whole
@@ -146,6 +157,19 @@ func envString(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitAndTrim turns "a, b ,c" into ["a","b","c"], dropping empties. Used for
+// list-valued env vars where trailing spaces after a comma are a common typo.
+func splitAndTrim(csv string) []string {
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // The env* helpers below record a problem and return the fallback rather than

@@ -24,6 +24,10 @@ type Options struct {
 	Logger         *slog.Logger
 	RequestTimeout time.Duration
 	MaxBodyBytes   int64
+	// CORSAllowedOrigins is the browser origins permitted to call the API. Empty
+	// disables CORS entirely (same-origin only), which is the right default for a
+	// service with no browser client.
+	CORSAllowedOrigins []string
 }
 
 // Defaults for anything the caller leaves unset.
@@ -91,15 +95,24 @@ func NewRouter(svc Service, pinger Pinger, opts Options) http.Handler {
 	//              becomes a response instead of a dead process.
 	//   Timeout    is innermost of the four so its deadline covers only handler
 	//              work, not the logging that reports on it.
-	chain := Chain(
+	// CORS sits just inside Logging so a preflight still gets an access-log line
+	// and a request ID, but outside Recover/Timeout/handler so an OPTIONS
+	// short-circuits before touching the mux. Only added when origins are
+	// configured, so a same-origin deployment carries no CORS headers at all.
+	mws := []Middleware{
 		RequestID(opts.Logger),
 		Logging(),
+	}
+	if len(opts.CORSAllowedOrigins) > 0 {
+		mws = append(mws, CORS(opts.CORSAllowedOrigins))
+	}
+	mws = append(mws,
 		Recover(),
 		Timeout(opts.RequestTimeout),
 		MaxBodyBytes(opts.MaxBodyBytes),
 	)
 
-	return chain(mux)
+	return Chain(mws...)(mux)
 }
 
 // handleNotFound keeps unmatched routes inside the JSON error contract, and

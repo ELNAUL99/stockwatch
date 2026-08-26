@@ -36,6 +36,16 @@ type fakeService struct {
 	blockFor   time.Duration
 }
 
+func (f *fakeService) ListProducts(_ context.Context) ([]*inventory.Product, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.product == nil {
+		return []*inventory.Product{}, nil
+	}
+	return []*inventory.Product{f.product}, nil
+}
+
 func (f *fakeService) GetProduct(_ context.Context, _ string) (*inventory.Product, error) {
 	if f.panicWith != nil {
 		panic(f.panicWith)

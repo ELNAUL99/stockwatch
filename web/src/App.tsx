@@ -38,7 +38,10 @@ interface SKUWithRec {
   loading: boolean;
 }
 
-const API_BASE = '';
+// Empty in dev — the Vite proxy (vite.config.ts) forwards /products to the
+// local backend. In a static production build there is no proxy, so VITE_API_URL
+// must point at the deployed API's origin.
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 async function getProducts(): Promise<Product[]> {
   const response = await fetch(`${API_BASE}/products`);

@@ -252,6 +252,55 @@ func Timeout(d time.Duration) Middleware {
 	}
 }
 
+// CORS answers browser preflights and tags responses with the allowed origin.
+//
+// The rules a browser enforces are asymmetric: it sends the request regardless,
+// then hides the response from the page unless Access-Control-Allow-Origin
+// matches. So this middleware does two jobs — short-circuit the OPTIONS
+// preflight with a 204, and stamp the header on the real response.
+//
+// allowed is either the single element "*" (echo any origin) or an explicit
+// list. We echo the caller's Origin rather than returning a literal "*" even in
+// wildcard mode, because echoing keeps the door open to enabling credentials
+// later without a rewrite — a literal "*" is incompatible with credentialed
+// requests, and that incompatibility surfaces as a baffling browser error.
+func CORS(allowed []string) Middleware {
+	allowAny := len(allowed) == 1 && allowed[0] == "*"
+	set := make(map[string]struct{}, len(allowed))
+	for _, o := range allowed {
+		set[o] = struct{}{}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+
+			if origin != "" {
+				_, listed := set[origin]
+				if allowAny || listed {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					// Vary: Origin so a cache keyed on the URL alone cannot serve
+					// one origin's allow-header to a different origin.
+					w.Header().Add("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+					w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+RequestIDHeader)
+					w.Header().Set("Access-Control-Max-Age", "86400")
+				}
+			}
+
+			// A preflight is an OPTIONS carrying Access-Control-Request-Method.
+			// It expects headers and an empty body, never the handler — routing
+			// it onward would 405, since no OPTIONS pattern is registered.
+			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // MaxBodyBytes caps request body size.
 //
 // Without this an unauthenticated POST can stream gigabytes into memory before

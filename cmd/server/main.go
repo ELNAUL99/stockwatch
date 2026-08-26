@@ -135,9 +135,10 @@ func run() error {
 	})
 
 	handler := httpapi.NewRouter(svc, store, httpapi.Options{
-		Logger:         logger,
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
+		Logger:             logger,
+		RequestTimeout:     cfg.RequestTimeout,
+		MaxBodyBytes:       cfg.MaxBodyBytes,
+		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 	})
 
 	srv := &http.Server{

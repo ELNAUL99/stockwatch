@@ -38,6 +38,17 @@ func newFakeStore() *fakeStore {
 	}
 }
 
+func (f *fakeStore) ListProducts(_ context.Context) ([]*Product, error) {
+	if f.getProductErr != nil {
+		return nil, f.getProductErr
+	}
+	out := make([]*Product, 0, len(f.products))
+	for _, p := range f.products {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 func (f *fakeStore) GetProduct(_ context.Context, sku string) (*Product, error) {
 	if f.getProductErr != nil {
 		return nil, f.getProductErr
