@@ -76,6 +76,34 @@ const productFrom = `
 	LEFT JOIN stock_positions sp ON sp.sku = p.sku
 `
 
+// ListProducts loads all products with their current stock positions.
+func (s *Store) ListProducts(ctx context.Context) ([]*inventory.Product, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+productColumns+productFrom+` ORDER BY p.sku`)
+	if err != nil {
+		return nil, fmt.Errorf("list products: %w", err)
+	}
+	defer rows.Close()
+
+	var products []*inventory.Product
+	for rows.Next() {
+		p, err := scanProduct(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan product: %w", err)
+		}
+		products = append(products, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list products iteration: %w", err)
+	}
+
+	if len(products) == 0 {
+		return []*inventory.Product{}, nil
+	}
+	return products, nil
+}
+
 // GetProduct loads one product with its current stock position.
 func (s *Store) GetProduct(ctx context.Context, sku string) (*inventory.Product, error) {
 	row := s.pool.QueryRow(ctx,

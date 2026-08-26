@@ -21,6 +21,7 @@ import (
 // interface. It also means these handlers can be tested against a fake with no
 // database anywhere in sight.
 type Service interface {
+	ListProducts(ctx context.Context) ([]*inventory.Product, error)
 	GetProduct(ctx context.Context, sku string) (*inventory.Product, error)
 	Recommend(ctx context.Context, sku string) (*inventory.Recommendation, error)
 	RecommendBatch(ctx context.Context, skus []string) ([]inventory.BatchResult, error)
@@ -93,6 +94,22 @@ func toProductResponse(p *inventory.Product) productResponse {
 	out.Position.TotalUnits = p.OnHandUnits + p.OnOrderUnits
 
 	return out
+}
+
+// handleListProducts serves GET /products.
+func (s *server) handleListProducts(w http.ResponseWriter, r *http.Request) {
+	products, err := s.svc.ListProducts(r.Context())
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	out := make([]productResponse, len(products))
+	for i, p := range products {
+		out[i] = toProductResponse(p)
+	}
+
+	writeJSON(w, r, http.StatusOK, out)
 }
 
 // handleGetProduct serves GET /products/{sku}.

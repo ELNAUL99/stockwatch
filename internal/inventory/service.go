@@ -25,6 +25,9 @@ import (
 
 // ProductStore reads product master data and current stock position.
 type ProductStore interface {
+	// ListProducts returns all products.
+	ListProducts(ctx context.Context) ([]*Product, error)
+
 	// GetProduct returns ErrProductNotFound if the SKU is unknown.
 	GetProduct(ctx context.Context, sku string) (*Product, error)
 
@@ -119,6 +122,11 @@ func (s *Service) RecordSale(ctx context.Context, sku string, day SalesDay) erro
 		return fmt.Errorf("record sales day for %s: %w", sku, err)
 	}
 	return nil
+}
+
+// ListProducts returns all products.
+func (s *Service) ListProducts(ctx context.Context) ([]*Product, error) {
+	return s.products.ListProducts(ctx)
 }
 
 // GetProduct returns a product with its current stock position.

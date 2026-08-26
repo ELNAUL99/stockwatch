@@ -70,6 +70,7 @@ func NewRouter(svc Service, pinger Pinger, opts Options) http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
+	mux.HandleFunc("GET /products", s.handleListProducts)
 	mux.HandleFunc("GET /products/{sku}", s.handleGetProduct)
 	mux.HandleFunc("POST /products/{sku}/sales", s.handleRecordSale)
 	mux.HandleFunc("GET /products/{sku}/recommendation", s.handleRecommendation)
