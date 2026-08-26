@@ -27,6 +27,13 @@
   color: #6b7280;
 }
 
+.header .summary {
+  margin: 12px 0 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
 .skus-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -217,7 +224,7 @@
 
 .reorder-section {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
 
