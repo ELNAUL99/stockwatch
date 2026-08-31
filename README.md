@@ -608,3 +608,47 @@ ERROR fatal error="invalid configuration:
 Cross-field rules are checked too — `WRITE_TIMEOUT` must exceed
 `REQUEST_TIMEOUT`, or the server severs the connection before a slow handler can
 report its own 504. See `.env.example` for the full list.
+
+## Continuous integration
+
+The same checks run in two systems, on purpose:
+
+| | Runs | Purpose |
+|---|---|---|
+| **GitHub Actions** (`.github/workflows/ci.yml`) | tidy · gofmt · vet · staticcheck · **full** `go test -race` (incl. Postgres integration) · coverage gate · Docker build + smoke test | The gate on every push and PR |
+| **Jenkins** (`Jenkinsfile`) | the same, with `go test -short -race` | Portable pipeline; toolchains pinned via container agents |
+
+The one deliberate difference is the test scope. GitHub's runners have a Docker
+daemon, so Actions runs the testcontainers-backed Postgres tests. The Jenkins
+stages run inside a `golang` container with no daemon of their own, so they run
+`-short` (unit and adapter tests) and leave the integration suite to Actions. To
+run the full suite in Jenkins too, give the node a Postgres and set
+`TEST_DATABASE_URL`, then drop `-short`.
+
+Both express one idea two ways. Where Actions adds Go with a `setup-go` step,
+the `Jenkinsfile` runs each stage inside `golang:1.25` — pinning the toolchain by
+choosing the image rather than by installing into a shared node.
+
+### Running the Jenkins pipeline locally
+
+The pipeline uses Docker container agents, so Jenkins itself needs Docker access
+(the Docker CLI on the node plus a reachable daemon). Start an LTS controller
+with the host socket mounted:
+
+```bash
+docker run -d --name jenkins \
+  -p 8080:8080 -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  jenkins/jenkins:lts
+```
+
+Then, in the UI: install the **Docker Pipeline** plugin, make the `docker` CLI
+reachable on the node, and create a **Pipeline** job set to *Pipeline script from
+SCM* pointing at this repo — Jenkins reads the `Jenkinsfile` from the root.
+
+Validate the syntax before a run with the declarative linter:
+
+```bash
+docker exec jenkins jenkins-cli declarative-linter < Jenkinsfile
+```
