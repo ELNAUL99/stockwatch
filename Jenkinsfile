@@ -1,25 +1,20 @@
 // Jenkins pipeline for stockwatch — a port of .github/workflows/ci.yml.
 //
 // Deliberately Docker-free so it runs on a plain Jenkins with nothing but Java
-// installed. The Go toolchain is supplied by Jenkins' own tool installer (the
-// "Go" plugin), which downloads it the way GitHub's `setup-go` step does — no
-// container agents, no daemon. The image-build stage at the end is optional and
-// skips itself when no Docker daemon is reachable, so the pipeline is green on a
-// machine without Docker and simply does more where Docker exists.
+// and a Go install on the node. It uses the system Go already on the agent's
+// PATH — no container agents, no daemon, and no Jenkins-managed tool to
+// configure. The image-build stage at the end is optional and skips itself when
+// no Docker daemon is reachable, so the pipeline is green on a machine without
+// Docker and simply does more where Docker exists.
 //
-// One-time setup (Manage Jenkins > Tools): add a Go installation named exactly
-// 'go-1.25', tick "Install automatically", pick 1.25.x. Install the "Go" plugin
-// first if the Go tool type is not offered. That is the whole prerequisite.
+// Prerequisite: `go` must be on the Jenkins node's PATH (e.g. Homebrew or an
+// official install). To let Jenkins manage the toolchain instead, install the
+// "Go" plugin, add a Go installation under Manage Jenkins > Tools, and add a
+// `tools { go '<name>' }` block referencing it.
 
 pipeline {
     // Runs on the built-in node (or any agent). No Docker required to allocate.
     agent any
-
-    tools {
-        // Must match the installation name configured in Manage Jenkins > Tools.
-        // Jenkins puts this Go's bin on PATH for every step below.
-        go 'go-1.25'
-    }
 
     options {
         timestamps()
