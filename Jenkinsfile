@@ -1,153 +1,131 @@
 // Jenkins pipeline for stockwatch — a port of .github/workflows/ci.yml.
 //
-// The two systems express the same intent differently, and the differences are
-// the point of keeping both:
+// Deliberately Docker-free so it runs on a plain Jenkins with nothing but Java
+// installed. The Go toolchain is supplied by Jenkins' own tool installer (the
+// "Go" plugin), which downloads it the way GitHub's `setup-go` step does — no
+// container agents, no daemon. The image-build stage at the end is optional and
+// skips itself when no Docker daemon is reachable, so the pipeline is green on a
+// machine without Docker and simply does more where Docker exists.
 //
-//   - GitHub Actions picks a runner image and adds toolchains with `uses:`
-//     steps. Jenkins has no equivalent; the idiomatic way to pin a toolchain is
-//     to run the stage *inside a container* whose image already carries it. So
-//     where the Actions file says `setup-go`, here the stage declares
-//     `agent { docker { image 'golang:1.25' } }` and Go is simply present.
-//
-//   - Actions groups everything in one YAML job with flat steps. Declarative
-//     Jenkins nests stages, so each check below is its own stage and shows as a
-//     separate box in Blue Ocean — a failing `staticcheck` is visible at a
-//     glance without reading logs.
-//
-// Prerequisite: the Jenkins node must be able to run containers (Docker CLI on
-// the node plus a reachable daemon). See the "Jenkins" section of the README for
-// a one-command local setup. Without that, the `docker` agents below cannot
-// start and the build fails immediately at agent allocation.
+// One-time setup (Manage Jenkins > Tools): add a Go installation named exactly
+// 'go-1.25', tick "Install automatically", pick 1.25.x. Install the "Go" plugin
+// first if the Go tool type is not offered. That is the whole prerequisite.
 
 pipeline {
-    // No global agent: every stage selects its own container. This keeps the
-    // controller itself out of the build and means nothing runs on a shared
-    // node where a stray tool version could drift from what CI pins.
-    agent none
+    // Runs on the built-in node (or any agent). No Docker required to allocate.
+    agent any
+
+    tools {
+        // Must match the installation name configured in Manage Jenkins > Tools.
+        // Jenkins puts this Go's bin on PATH for every step below.
+        go 'go-1.25'
+    }
 
     options {
         timestamps()
-        // A hung integration test should fail the build, not occupy an executor
-        // for the default number of hours.
         timeout(time: 20, unit: 'MINUTES')
-        // A newer commit makes an in-flight run obsolete; this is the Jenkins
-        // equivalent of the Actions `concurrency: cancel-in-progress`.
+        // The Jenkins equivalent of Actions' concurrency cancel-in-progress.
         disableConcurrentBuilds(abortPrevious: true)
         buildDiscarder(logRotator(numToKeepStr: '20'))
     }
 
     environment {
-        // go.mod pins the exact language version; refuse to silently download a
-        // different toolchain, so the build fails loudly if the image drifts.
+        // go.mod pins the language version; refuse to silently fetch another
+        // toolchain, so a mismatch fails loudly instead of drifting.
         GOTOOLCHAIN = 'local'
-        IMAGE       = 'stockwatch:ci'
+        // Keep the module and build caches inside the workspace. Nothing global
+        // needs to be writable, and no state leaks between jobs on a shared node.
+        GOPATH  = "${WORKSPACE}/.go"
+        GOCACHE = "${WORKSPACE}/.gocache"
+        // Prepend GOPATH/bin so `go install`ed tools (staticcheck) are found.
+        PATH    = "${WORKSPACE}/.go/bin:${PATH}"
+        IMAGE   = 'stockwatch:ci'
     }
 
     stages {
-        stage('Verify (Go)') {
-            agent {
-                docker {
-                    image 'golang:1.25'
-                    // Run as root so `go install` and the module cache can write
-                    // to /go and /root/.cache. The Docker Pipeline plugin would
-                    // otherwise inject the Jenkins uid, which owns neither.
-                    args  '-u root:root'
-                }
-            }
-            stages {
-                stage('go.mod tidy') {
-                    // Catches a dependency added without `go mod tidy`. First,
-                    // because an untidy go.mod can pull in modules the committed
-                    // go.sum does not cover and break every later step.
-                    steps {
-                        sh '''
-                            go mod tidy
-                            git diff --exit-code go.mod go.sum \
-                              || { echo "go.mod/go.sum are not tidy; run 'go mod tidy'"; exit 1; }
-                        '''
-                    }
-                }
-
-                stage('gofmt') {
-                    steps {
-                        sh '''
-                            unformatted=$(gofmt -l .)
-                            if [ -n "$unformatted" ]; then
-                                echo "these files are not gofmt'd:"
-                                echo "$unformatted"
-                                exit 1
-                            fi
-                        '''
-                    }
-                }
-
-                stage('go vet') {
-                    steps { sh 'go vet ./...' }
-                }
-
-                stage('staticcheck') {
-                    // No pinned-action equivalent here, so install it into the
-                    // container. GOBIN is on PATH in the golang image already.
-                    steps {
-                        sh '''
-                            go install honnef.co/go/tools/cmd/staticcheck@latest
-                            staticcheck ./...
-                        '''
-                    }
-                }
-
-                stage('test -race') {
-                    // -short skips the Postgres integration tests. They rely on
-                    // testcontainers, which needs a Docker daemon this build
-                    // container does not have — so this stage covers the unit and
-                    // adapter tests, and GitHub Actions remains the gate that
-                    // runs the full integration suite on a Docker-capable runner.
-                    // To run them here too, give the node a Postgres and set
-                    // TEST_DATABASE_URL, then drop -short.
-                    //
-                    // -race roughly doubles runtime but catches data races that
-                    // are otherwise invisible until they corrupt production state.
-                    steps { sh 'go test -short -race ./...' }
-                }
-
-                stage('domain coverage >= 80%') {
-                    // The domain package is the part worth protecting. The gate
-                    // guards against silently deleting tests, not against writing
-                    // assertions purely to raise a number.
-                    steps {
-                        sh '''
-                            go test -short -coverprofile=domain.out ./internal/inventory/
-                            pct=$(go tool cover -func=domain.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
-                            echo "internal/inventory coverage: ${pct}%"
-                            awk -v p="$pct" 'BEGIN { exit (p >= 80 ? 0 : 1) }' \
-                              || { echo "domain coverage ${pct}% is below the 80% threshold"; exit 1; }
-                        '''
-                    }
-                }
-
-                stage('build binaries') {
-                    // A compile-only check. Output is discarded — the Docker
-                    // stage builds the shipping artifact; this just proves the
-                    // non-server commands still compile.
-                    steps {
-                        sh '''
-                            CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/server
-                            CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/migrate
-                        '''
-                    }
-                }
+        stage('go.mod tidy') {
+            // Catches a dependency added without `go mod tidy`. First, because an
+            // untidy go.mod can pull in modules the committed go.sum does not
+            // cover and break every later step.
+            steps {
+                sh '''
+                    go mod tidy
+                    git diff --exit-code go.mod go.sum \
+                      || { echo "go.mod/go.sum are not tidy; run 'go mod tidy'"; exit 1; }
+                '''
             }
         }
 
-        stage('Docker image') {
-            agent {
-                docker {
-                    // A CLI-only image bind-mounted onto the host daemon: it can
-                    // drive `docker build`/`docker run` without a daemon of its
-                    // own (no docker-in-docker). Root, so it can reach the socket.
-                    image 'docker:cli'
-                    args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
-                }
+        stage('gofmt') {
+            steps {
+                sh '''
+                    unformatted=$(gofmt -l .)
+                    if [ -n "$unformatted" ]; then
+                        echo "these files are not gofmt'd:"
+                        echo "$unformatted"
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        stage('go vet') {
+            steps { sh 'go vet ./...' }
+        }
+
+        stage('staticcheck') {
+            // Installed into the workspace GOPATH, then run. Pinned to @latest to
+            // match the Actions job.
+            steps {
+                sh '''
+                    go install honnef.co/go/tools/cmd/staticcheck@latest
+                    staticcheck ./...
+                '''
+            }
+        }
+
+        stage('test -race') {
+            // -short skips the Postgres integration tests, which need a Docker
+            // daemon (testcontainers) this pipeline intentionally does without.
+            // GitHub Actions runs the full suite on a Docker-capable runner; here
+            // we get the unit and adapter tests. To run integration too, give the
+            // node a Postgres, set TEST_DATABASE_URL, and drop -short.
+            //
+            // -race needs a C compiler on the node (clang on macOS, gcc on Linux).
+            steps { sh 'go test -short -race ./...' }
+        }
+
+        stage('domain coverage >= 80%') {
+            // The domain package is the part worth protecting. The gate guards
+            // against silently deleting tests, not against padding a number.
+            steps {
+                sh '''
+                    go test -short -coverprofile=domain.out ./internal/inventory/
+                    pct=$(go tool cover -func=domain.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+                    echo "internal/inventory coverage: ${pct}%"
+                    awk -v p="$pct" 'BEGIN { exit (p >= 80 ? 0 : 1) }' \
+                      || { echo "domain coverage ${pct}% is below the 80% threshold"; exit 1; }
+                '''
+            }
+        }
+
+        stage('build binaries') {
+            // Compile-only check; output discarded. Proves the commands build
+            // without producing an artifact — that is the Docker stage's job.
+            steps {
+                sh '''
+                    CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/server
+                    CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/migrate
+                '''
+            }
+        }
+
+        stage('Docker image (optional)') {
+            // Runs only where a Docker daemon is reachable. On a Docker-free node
+            // the guard is false and the stage is skipped, not failed — so the
+            // pipeline is green without Docker and builds the image where it can.
+            when {
+                expression { return sh(returnStatus: true, script: 'docker info >/dev/null 2>&1') == 0 }
             }
             stages {
                 stage('build') {
@@ -160,19 +138,14 @@ pipeline {
                         '''
                     }
                 }
-
                 stage('smoke test (-version)') {
-                    // Proves the binary in the image actually runs. A static-
-                    // linking mistake builds a perfect image that then exits 1 on
-                    // start with "no such file or directory" — only a run catches
-                    // it.
+                    // A static-linking mistake builds a perfect image that exits 1
+                    // on start with "no such file or directory". Only a run finds it.
                     steps { sh 'docker run --rm "$IMAGE" -version' }
                 }
-
                 stage('distroless: no shell') {
-                    // The runtime base is distroless partly so an attacker with
-                    // RCE finds no shell to pivot with. If a future edit swaps in
-                    // alpine for convenience, this fails.
+                    // The runtime base is distroless so an attacker with RCE finds
+                    // no shell. If a future edit swaps in alpine, this fails.
                     steps {
                         sh '''
                             if docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'echo shell present' 2>/dev/null; then
@@ -185,14 +158,13 @@ pipeline {
                 }
             }
             post {
-                // Don't leave CI-tagged images piling up on the node.
-                always { sh 'docker image rm "$IMAGE" || true' }
+                always { sh 'docker image rm "$IMAGE" 2>/dev/null || true' }
             }
         }
     }
 
     post {
-        success { echo 'stockwatch pipeline passed: vet, staticcheck, race tests, coverage, and a distroless image smoke test.' }
+        success { echo 'stockwatch pipeline passed: vet, staticcheck, race tests, and the domain coverage gate.' }
         failure { echo 'stockwatch pipeline failed — see the first red stage above.' }
     }
 }

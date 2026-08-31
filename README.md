@@ -616,39 +616,46 @@ The same checks run in two systems, on purpose:
 | | Runs | Purpose |
 |---|---|---|
 | **GitHub Actions** (`.github/workflows/ci.yml`) | tidy · gofmt · vet · staticcheck · **full** `go test -race` (incl. Postgres integration) · coverage gate · Docker build + smoke test | The gate on every push and PR |
-| **Jenkins** (`Jenkinsfile`) | the same, with `go test -short -race` | Portable pipeline; toolchains pinned via container agents |
+| **Jenkins** (`Jenkinsfile`) | the same, with `go test -short -race`; the Docker image stage self-skips when no daemon is present | Portable pipeline that runs without Docker |
 
-The one deliberate difference is the test scope. GitHub's runners have a Docker
-daemon, so Actions runs the testcontainers-backed Postgres tests. The Jenkins
-stages run inside a `golang` container with no daemon of their own, so they run
-`-short` (unit and adapter tests) and leave the integration suite to Actions. To
-run the full suite in Jenkins too, give the node a Postgres and set
-`TEST_DATABASE_URL`, then drop `-short`.
+The deliberate difference is test scope. GitHub's runners have a Docker daemon,
+so Actions runs the testcontainers-backed Postgres tests. The Jenkins pipeline is
+written to need no Docker at all, so it runs `-short` (unit and adapter tests)
+and leaves the integration suite to Actions. To run the full suite in Jenkins
+too, give the node a Postgres, set `TEST_DATABASE_URL`, and drop `-short`.
 
-Both express one idea two ways. Where Actions adds Go with a `setup-go` step,
-the `Jenkinsfile` runs each stage inside `golang:1.25` — pinning the toolchain by
-choosing the image rather than by installing into a shared node.
+Both express one idea two ways. Where Actions adds Go with a `setup-go` step, the
+`Jenkinsfile` uses Jenkins' own **Go tool installer** — the toolchain is
+downloaded by Jenkins, not carried in a container.
 
-### Running the Jenkins pipeline locally
+### Running the Jenkins pipeline locally — no Docker required
 
-The pipeline uses Docker container agents, so Jenkins itself needs Docker access
-(the Docker CLI on the node plus a reachable daemon). Start an LTS controller
-with the host socket mounted:
+Run Jenkins natively (no `docker run`). On macOS:
 
 ```bash
-docker run -d --name jenkins \
-  -p 8080:8080 -p 50000:50000 \
-  -v jenkins_home:/var/jenkins_home \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  jenkins/jenkins:lts
+brew install jenkins-lts
+brew services start jenkins-lts   # serves http://localhost:8080
 ```
 
-Then, in the UI: install the **Docker Pipeline** plugin, make the `docker` CLI
-reachable on the node, and create a **Pipeline** job set to *Pipeline script from
-SCM* pointing at this repo — Jenkins reads the `Jenkinsfile` from the root.
+Or, with any Java 17+, run the war directly: `java -jar jenkins.war`.
 
-Validate the syntax before a run with the declarative linter:
+Then, in the UI:
+
+1. **Manage Jenkins → Plugins** — install **Go** (and the Pipeline plugins, which
+   ship with a standard install).
+2. **Manage Jenkins → Tools → Go installations** — add one named exactly
+   `go-1.25`, tick *Install automatically*, choose 1.25.x. Jenkins downloads the
+   toolchain; nothing to install by hand.
+3. **New Item → Pipeline** → *Pipeline script from SCM* → point at this repo.
+   Jenkins reads the `Jenkinsfile` from the root.
+
+The `-race` stage needs a C compiler on the node (clang via Xcode command-line
+tools on macOS, gcc on Linux). The final Docker-image stage runs only if a daemon
+is reachable and skips cleanly otherwise, so a Docker-free box still goes green.
+
+Validate the syntax before a run with the declarative linter (needs `JENKINS_URL`
+set and the Jenkins CLI jar):
 
 ```bash
-docker exec jenkins jenkins-cli declarative-linter < Jenkinsfile
+java -jar jenkins-cli.jar -s "$JENKINS_URL" declarative-linter < Jenkinsfile
 ```
