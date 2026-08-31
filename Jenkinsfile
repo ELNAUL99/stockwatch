@@ -52,9 +52,13 @@ pipeline {
         }
 
         stage('gofmt') {
+            // Scope to this module's own sources. `gofmt .` recurses everything,
+            // including the workspace-local module cache (GOPATH=.go), which holds
+            // hundreds of unformatted dependency files. The go tool's `./...`
+            // skips dot-dirs for us; gofmt does not, so exclude them by hand.
             steps {
                 sh '''
-                    unformatted=$(gofmt -l .)
+                    unformatted=$(gofmt -l $(find . -type f -name '*.go' -not -path './.go/*' -not -path './vendor/*'))
                     if [ -n "$unformatted" ]; then
                         echo "these files are not gofmt'd:"
                         echo "$unformatted"
